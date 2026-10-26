@@ -1,0 +1,64 @@
+type: entities
+title: B2500
+show_header_toggle: false
+entities:
+  - type: section
+    label: Battery 1
+  - entity: sensor.b2500lite_b1_soc
+    name: SOC
+  - entity: sensor.b2500lite_b1_temp_min
+    name: Temperature min
+  - entity: sensor.b2500lite_b1_temp_max
+    name: Temperature max
+  - entity: sensor.b2500lite_b1_battery_state
+    name: Battery
+  - entity: sensor.b2500lite_b1_pv1_state
+    name: PV1 in state
+  - entity: sensor.b2500lite_b1_pv1_power
+    name: PV1 in power
+  - entity: sensor.b2500lite_b1_pv2_state
+    name: PV2 in state
+  - entity: sensor.b2500lite_b1_pv2_power
+    name: PV2 in power
+  - entity: sensor.b2500lite_b1_out1_state
+    name: OUT1 state
+  - entity: sensor.b2500lite_b1_out1_power
+    name: OUT1 power
+  - entity: sensor.b2500lite_b1_out2_state
+    name: OUT2 state
+  - entity: sensor.b2500lite_b1_out2_power
+    name: OUT2 power
+  - entity: sensor.b2500lite_b1_charge_power
+    name: Charge power
+  - entity: sensor.b2500lite_b1_discharge_power
+    name: Discharge power
+  - type: section
+    label: Battery 2
+  - entity: sensor.b2500lite_b2_soc
+    name: SOC
+  - entity: sensor.b2500lite_b2_temp_min
+    name: Temperature min
+  - entity: sensor.b2500lite_b2_temp_max
+    name: Temperature max
+  - entity: sensor.b2500lite_b2_battery_state
+    name: Battery
+  - entity: sensor.b2500lite_b2_pv1_state
+    name: PV1 in state
+  - entity: sensor.b2500lite_b2_pv1_power
+    name: PV1 in power
+  - entity: sensor.b2500lite_b2_pv2_state
+    name: PV2 in state
+  - entity: sensor.b2500lite_b2_pv2_power
+    name: PV2 in power
+  - entity: sensor.b2500lite_b2_out1_state
+    name: OUT1 state
+  - entity: sensor.b2500lite_b2_out1_power
+    name: OUT1 power
+  - entity: sensor.b2500lite_b2_out2_state
+    name: OUT2 state
+  - entity: sensor.b2500lite_b2_out2_power
+    name: OUT2 power
+  - entity: sensor.b2500lite_b2_charge_power
+    name: Charge power
+  - entity: sensor.b2500lite_b2_discharge_power
+    name: Discharge power

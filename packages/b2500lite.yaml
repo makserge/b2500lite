@@ -1,0 +1,367 @@
+# ============================================================
+# B2500 Lite – minimal Home Assistant package for two Marstek
+# B2500 batteries with local MQTT enabled.
+#
+# Polls CD01 from both batteries every 30 s and exposes:
+#   SOC, temperature (min/max), PV1/PV2 input status + power,
+#   OUT1/OUT2 output status + power, battery status
+#   (charging/discharging/idle), charge power, discharge power.
+#
+# Setup: edit the CONSTANTS block below (4 lines), then restart
+# Home Assistant. Requires the MQTT integration and HA 2025.10+.
+#
+# Derived from B2500PKG © Martin0475
+# (https://github.com/Martin0475/b2500pkg), GPL-2.0.
+# Reduced and modified 2026-10-26; distributed under GPL-2.0.
+# ============================================================
+
+automation:
+  - id: b2500lite_bridge
+    alias: B2500 Lite bridge
+    description: Polls CD01 from both batteries and republishes the parsed answer as JSON.
+    mode: parallel
+    max: 10
+    trace:
+      stored_traces: 0
+
+    # ================== CONSTANTS – edit here ==================
+    # base = "<MQTT topic prefix>/<device type>", as set in the
+    # battery's MQTT settings (default prefix hame_energy, type HMA-1).
+    # mac  = device MAC/ID as used in the topic, lowercase, no colons.
+    trigger_variables:
+      b1_base: "hame_energy/HMA-1"
+      b1_mac: "000000000001"
+      b2_base: "hame_energy/HMA-1"
+      b2_mac: "000000000002"
+    # ===========================================================
+
+    triggers:
+      - trigger: time_pattern
+        seconds: "/30"
+        id: poll
+      - trigger: homeassistant
+        event: start
+        id: poll
+      - trigger: mqtt
+        topic: "{{ b1_base }}/device/{{ b1_mac }}/ctrl"
+        id: b1
+      - trigger: mqtt
+        topic: "{{ b2_base }}/device/{{ b2_mac }}/ctrl"
+        id: b2
+
+    actions:
+      - choose:
+          - conditions: "{{ trigger.id == 'poll' }}"
+            sequence:
+              - action: mqtt.publish
+                data:
+                  topic: "{{ b1_base }}/App/{{ b1_mac }}/ctrl"
+                  payload: cd=01
+              # spread the two requests so the answers don't collide
+              - delay:
+                  seconds: 3
+              - action: mqtt.publish
+                data:
+                  topic: "{{ b2_base }}/App/{{ b2_mac }}/ctrl"
+                  payload: cd=01
+
+        default:
+          # Answer from a battery: "p1=1,p2=1,w1=110,...,pe=91,..." -> dict
+          - variables:
+              answer: >-
+                {% set ns = namespace(items=[]) %}
+                {% for part in trigger.payload.split(',') %}
+                  {% if '=' in part %}
+                    {% set kv = part.split('=', 1) %}
+                    {% set ns.items = ns.items + [(kv[0] | trim, kv[1] | trim)] %}
+                  {% endif %}
+                {% endfor %}
+                {{ dict(ns.items) }}
+          # The device topic also carries other answers (CD13, CD16 ...);
+          # only CD01 has all of these keys.
+          - condition: template
+            value_template: >-
+              {{ answer is mapping
+                 and ['pe', 'p1', 'p2', 'w1', 'w2', 'o1', 'o2', 'g1', 'g2', 'l0']
+                     | reject('in', answer) | list | count == 0 }}
+          - action: mqtt.publish
+            data:
+              topic: "b2500lite/{{ trigger.id }}/cd01"
+              payload: "{{ answer | to_json }}"
+
+# ============================================================
+# Sensors – read the JSON published by the bridge above.
+# Values become unavailable if no answer arrives for 5 minutes.
+# ============================================================
+
+mqtt:
+  sensor:
+    # ---------------- Battery 1 ----------------
+    - <<: &soc
+        name: SOC
+        value_template: "{{ value_json.pe | int(0) }}"
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        expire_after: 300
+      unique_id: b2500lite_b1_soc
+      default_entity_id: sensor.b2500lite_b1_soc
+      state_topic: b2500lite/b1/cd01
+      device: &b1_device
+        identifiers: [b2500lite_b1]
+        name: B2500 Lite 1
+        manufacturer: Marstek
+        model: B2500
+
+    - <<: &temp_min
+        name: Temperature min
+        value_template: "{{ value_json.tl | int(0) }}"
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        expire_after: 300
+      unique_id: b2500lite_b1_temp_min
+      default_entity_id: sensor.b2500lite_b1_temp_min
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    - <<: &temp_max
+        name: Temperature max
+        value_template: "{{ value_json.th | int(0) }}"
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        expire_after: 300
+      unique_id: b2500lite_b1_temp_max
+      default_entity_id: sensor.b2500lite_b1_temp_max
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    # Input status: 0 = off, 1 = charging, 2 = pass-through
+    - <<: &pv1_state
+        name: PV1 status
+        value_template: >-
+          {{ {'0': 'Off', '1': 'Charging', '2': 'Pass-through'}.get(value_json.p1, 'Unknown') }}
+        icon: mdi:solar-panel
+        expire_after: 300
+      unique_id: b2500lite_b1_pv1_state
+      default_entity_id: sensor.b2500lite_b1_pv1_state
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    - <<: &pv2_state
+        name: PV2 status
+        value_template: >-
+          {{ {'0': 'Off', '1': 'Charging', '2': 'Pass-through'}.get(value_json.p2, 'Unknown') }}
+        icon: mdi:solar-panel
+        expire_after: 300
+      unique_id: b2500lite_b1_pv2_state
+      default_entity_id: sensor.b2500lite_b1_pv2_state
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    - <<: &pv1_power
+        name: PV1 power
+        value_template: "{{ value_json.w1 | int(0) }}"
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        expire_after: 300
+      unique_id: b2500lite_b1_pv1_power
+      default_entity_id: sensor.b2500lite_b1_pv1_power
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    - <<: &pv2_power
+        name: PV2 power
+        value_template: "{{ value_json.w2 | int(0) }}"
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        expire_after: 300
+      unique_id: b2500lite_b1_pv2_power
+      default_entity_id: sensor.b2500lite_b1_pv2_power
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    # Output status: 0 = off, 1 = discharging
+    - <<: &out1_state
+        name: OUT1 status
+        value_template: "{{ 'Discharging' if value_json.o1 == '1' else 'Off' }}"
+        icon: mdi:power-socket-de
+        expire_after: 300
+      unique_id: b2500lite_b1_out1_state
+      default_entity_id: sensor.b2500lite_b1_out1_state
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    - <<: &out2_state
+        name: OUT2 status
+        value_template: "{{ 'Discharging' if value_json.o2 == '1' else 'Off' }}"
+        icon: mdi:power-socket-de
+        expire_after: 300
+      unique_id: b2500lite_b1_out2_state
+      default_entity_id: sensor.b2500lite_b1_out2_state
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    - <<: &out1_power
+        name: OUT1 power
+        value_template: "{{ value_json.g1 | int(0) }}"
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        expire_after: 300
+      unique_id: b2500lite_b1_out1_power
+      default_entity_id: sensor.b2500lite_b1_out1_power
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    - <<: &out2_power
+        name: OUT2 power
+        value_template: "{{ value_json.g2 | int(0) }}"
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        expire_after: 300
+      unique_id: b2500lite_b1_out2_power
+      default_entity_id: sensor.b2500lite_b1_out2_power
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    # l0 bit 0 = discharging, bit 1 = charging
+    - <<: &battery_state
+        name: Battery status
+        value_template: >-
+          {% set l0 = value_json.l0 | int(0) %}
+          {{ 'Charging' if (l0 // 2) % 2 == 1 else 'Discharging' if l0 % 2 == 1 else 'Idle' }}
+        icon: mdi:battery-sync
+        expire_after: 300
+      unique_id: b2500lite_b1_battery_state
+      default_entity_id: sensor.b2500lite_b1_battery_state
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    # Battery power derived from CD01: PV in minus AC out
+    # (approximate, conversion losses are not included).
+    - <<: &charge_power
+        name: Charge power
+        value_template: >-
+          {% set net = (value_json.w1 | int(0)) + (value_json.w2 | int(0))
+                     - (value_json.g1 | int(0)) - (value_json.g2 | int(0)) %}
+          {{ [net, 0] | max }}
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        icon: mdi:battery-arrow-up
+        expire_after: 300
+      unique_id: b2500lite_b1_charge_power
+      default_entity_id: sensor.b2500lite_b1_charge_power
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    - <<: &discharge_power
+        name: Discharge power
+        value_template: >-
+          {% set net = (value_json.w1 | int(0)) + (value_json.w2 | int(0))
+                     - (value_json.g1 | int(0)) - (value_json.g2 | int(0)) %}
+          {{ [-net, 0] | max }}
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        icon: mdi:battery-arrow-down
+        expire_after: 300
+      unique_id: b2500lite_b1_discharge_power
+      default_entity_id: sensor.b2500lite_b1_discharge_power
+      state_topic: b2500lite/b1/cd01
+      device: *b1_device
+
+    # ---------------- Battery 2 ----------------
+    # Same definitions as battery 1; only IDs, topic and device differ.
+    - <<: *soc
+      unique_id: b2500lite_b2_soc
+      default_entity_id: sensor.b2500lite_b2_soc
+      state_topic: b2500lite/b2/cd01
+      device: &b2_device
+        identifiers: [b2500lite_b2]
+        name: B2500 Lite 2
+        manufacturer: Marstek
+        model: B2500
+
+    - <<: *temp_min
+      unique_id: b2500lite_b2_temp_min
+      default_entity_id: sensor.b2500lite_b2_temp_min
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *temp_max
+      unique_id: b2500lite_b2_temp_max
+      default_entity_id: sensor.b2500lite_b2_temp_max
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *pv1_state
+      unique_id: b2500lite_b2_pv1_state
+      default_entity_id: sensor.b2500lite_b2_pv1_state
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *pv2_state
+      unique_id: b2500lite_b2_pv2_state
+      default_entity_id: sensor.b2500lite_b2_pv2_state
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *pv1_power
+      unique_id: b2500lite_b2_pv1_power
+      default_entity_id: sensor.b2500lite_b2_pv1_power
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *pv2_power
+      unique_id: b2500lite_b2_pv2_power
+      default_entity_id: sensor.b2500lite_b2_pv2_power
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *out1_state
+      unique_id: b2500lite_b2_out1_state
+      default_entity_id: sensor.b2500lite_b2_out1_state
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *out2_state
+      unique_id: b2500lite_b2_out2_state
+      default_entity_id: sensor.b2500lite_b2_out2_state
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *out1_power
+      unique_id: b2500lite_b2_out1_power
+      default_entity_id: sensor.b2500lite_b2_out1_power
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *out2_power
+      unique_id: b2500lite_b2_out2_power
+      default_entity_id: sensor.b2500lite_b2_out2_power
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *battery_state
+      unique_id: b2500lite_b2_battery_state
+      default_entity_id: sensor.b2500lite_b2_battery_state
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *charge_power
+      unique_id: b2500lite_b2_charge_power
+      default_entity_id: sensor.b2500lite_b2_charge_power
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
+
+    - <<: *discharge_power
+      unique_id: b2500lite_b2_discharge_power
+      default_entity_id: sensor.b2500lite_b2_discharge_power
+      state_topic: b2500lite/b2/cd01
+      device: *b2_device
